@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Stickman Basketball Duel</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#101a31;color:#fff;font-family:Arial,sans-serif;display:flex;justify-content:center;min-height:100vh}
+#wrap{width:min(100%,1000px);padding:12px}h1{text-align:center;font-size:clamp(22px,4vw,34px);margin:8px 0 10px}
+#menu{background:#1c2b4b;border:2px solid #52678e;border-radius:18px;padding:20px;text-align:center;max-width:620px;margin:20px auto}
+#menu p{line-height:1.5;color:#dce7ff}label{display:block;margin:16px 0 8px;font-weight:bold}
+select,button{font-size:17px;border:0;border-radius:12px;padding:12px 16px}
+button{background:#ffca3a;color:#17213a;font-weight:bold;cursor:pointer}
+#start{display:block;margin:18px auto 0;min-width:180px}
+#game{display:none}
+#hud{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin:8px 0}
+.pill{background:#243655;padding:8px 12px;border-radius:12px}
+canvas{display:block;width:100%;height:auto;aspect-ratio:900/500;background:#c9edff;border:3px solid #fff;border-radius:14px;touch-action:none}
+#help{text-align:center;font-size:14px;color:#dce7ff;line-height:1.45;margin:8px 0}
+.controls{display:flex;justify-content:center;gap:10px;flex-wrap:wrap;margin-top:10px}
+.controls button{min-width:64px;touch-action:none}
+#again{background:#7ee081}
+</style>
+</head>
+<body>
+<div id="wrap">
+<h1>🏀 Stickman Basketball Duel</h1>
+<section id="menu">
+<h2>Выбери цвет стикмена</h2>
+<p>Играй против бота: двигайся, прыгай и целись в кольцо. Кто поймал мяч — тот может бросать!</p>
+<label for="colorPick">Цвет твоего стикмена</label>
+<select id="colorPick">
+<option value="#1769df">Синий</option><option value="#e53935">Красный</option><option value="#ec4899">Розовый</option><option value="#fdd835">Жёлтый</option><option value="#43a047">Зелёный</option><option value="#8e44ad">Фиолетовый</option><option value="#fb8c00">Оранжевый</option><option value="#00acc1">Голубой</option><option value="#ffffff">Белый</option><option value="#171717">Чёрный</option><option value="#795548">Коричневый</option>
+</select>
+<button id="start">ИГРАТЬ</button>
+</section>
+<section id="game">
+<div id="hud"><span class="pill">🔵 Ты: <b id="ps">0</b></span><span class="pill">Первый до 5 очков!</span><span class="pill">🔴 Бот: <b id="bs">0</b></span><button id="back">Меню</button></div>
+<canvas id="court" width="900" height="500" aria-label="Баскетбольная площадка"></canvas>
+<div id="help">← → / A D — движение · ↑ / W / ПРОБЕЛ — прыжок · ENTER — бросок · E — отбор.<br>Отбор работает только рядом с соперником! Можно потянуть мяч пальцем/мышью, чтобы прицелиться. Прицел — кружок с крестиком.</div>
+<div class="controls"><button id="left">◀</button><button id="jump">⬆ Прыжок</button><button id="right">▶</button><button id="shoot">🏀 Бросок</button><button id="steal">✋ Отбор</button><button id="again">Сначала</button></div>
+</section>
+</div>
+<script>
+(()=>{
+const menu=document.getElementById('menu'), game=document.getElementById('game'), canvas=document.getElementById('court'), ctx=canvas.getContext('2d');
+const colorPick=document.getElementById('colorPick');
+const ps=document.getElementById('ps'), bs=document.getElementById('bs');
+const W=900,H=500,ground=445;
+let running=false,scoreP=0,scoreB=0,turn='you',aiming=false,pointer=null,keys={},last=0;
+let player,bot,ball;
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+function person(x,color,dir){return {x,y:ground,color,dir,vx:0,vy:0,onGround:true,jumpCD:0,stealAnim:0,stealCD:0}}
+function newRound(){
+ player=person(230,colorPick.value,1);bot=person(670,'#e53935',-1);
+ ball={x:player.x+30,y:ground-43,vx:0,vy:0,active:false,owner:'you',scored:false,bounces:0};
+ turn='you';aiming=false;pointer=null;
+}
+function start(){menu.style.display='none';game.style.display='block';running=true;scoreP=scoreB=0;ps.textContent=bs.textContent='0';newRound();last=performance.now();requestAnimationFrame(loop)}
+function stop(){running=false;game.style.display='none';menu.style.display='block'}
+document.getElementById('start').onclick=start;document.getElementById('back').onclick=stop;
+document.getElementById('again').onclick=()=>{scoreP=scoreB=0;ps.textContent=bs.textContent='0';newRound()};
+function jump(a){if(a.onGround){a.vy=-12.6;a.onGround=false}}
+function hoop(side){return side==='left'?{x:66,y:278,dir:1}:{x:834,y:278,dir:-1}}
+function targetHoop(who){return hoop(who==='you'?'right':'left')}
+function ballOwner(who){const a=who==='you'?player:bot;ball.owner=who;ball.active=false;ball.scored=false;ball.x=a.x+a.dir*30;ball.y=a.y-43;ball.vx=ball.vy=0;turn=who}
+function throwFrom(who,vx,vy){if(turn!==who||ball.active)return;const a=who==='you'?player:bot;ball.x=a.x+a.dir*30;ball.y=a.y-43;ball.vx=vx;ball.vy=vy;ball.active=true;ball.owner=null;ball.scored=false;ball.bounces=0;turn=null}
+function throwPlayer(){if(!running||turn!=='you'||ball.active)return;const h=targetHoop('you'),dx=h.x-ball.x,dy=(h.y-30)-ball.y;throwFrom('you',clamp(dx/28,8,15),clamp(dy/24,-12,-4))}
+function trySteal(who){
+ if(!running || ball.active) return;
+ const attacker=who==='you'?player:bot;
+ const defender=who==='you'?bot:player;
+ // You can only steal when the opponent owns the ball, and only at close range.
+ if(turn!==(who==='you'?'bot':'you')) return;
+ const distance=Math.hypot(attacker.x-defender.x, (attacker.y-25)-(defender.y-25));
+ attacker.stealAnim=18;
+ if(distance>76){
+  if(who==='you') stealMessage='Подойди ближе к боту!';
+  return;
+ }
+ if(Math.random()<0.68){
+  ballOwner(who);
+  stealMessage=who==='you'?'Ты отобрал мяч!':'Бот отобрал мяч!';
+ } else {
+  stealMessage=who==='you'?'Не получилось! Попробуй ещё раз.':'Бот не смог отобрать мяч!';
+ }
+}
+let stealMessage='Подойди к боту и нажми «Отбор».';
+function update(dt){
+ const s=dt/16.67;
+ for(const a of [player,bot]){
+  a.jumpCD=Math.max(0,a.jumpCD-s);a.stealAnim=Math.max(0,a.stealAnim-s);a.stealCD=Math.max(0,a.stealCD-s);
+  a.x=clamp(a.x+a.vx*s,75,825);
+  a.y+=a.vy*s;a.vy+=.62*s;
+  if(a.y>=ground){a.y=ground;a.vy=0;a.onGround=true}
+ }
+ // Player controls
+ player.vx=0;
+ if(keys.ArrowLeft||keys.KeyA)player.vx=-4.1;
+ if(keys.ArrowRight||keys.KeyD)player.vx=4.1;
+ if(player.vx)player.dir=Math.sign(player.vx);
+ // Bot chases the ball and actively contests shots
+ const bx=ball.active?ball.x:(turn==='bot'?bot.x:player.x);
+ if(turn==='bot'&&!ball.active){bot.vx=0}
+ else if(ball.active){bot.vx=clamp((ball.x-bot.x)*.035,-3.3,3.3)}
+ else if(turn==='you'){bot.vx=clamp((player.x-bot.x)*.022,-2.2,2.2)}
+ if(Math.abs(bot.vx)>.3)bot.dir=Math.sign(bot.vx);
+ if(ball.active){
+  ball.x+=ball.vx*s;ball.y+=ball.vy*s;ball.vy+=.25*s;
+  // Hoop scoring: ball crosses near the rim from above
+  for(const side of ['left','right']){
+   const h=hoop(side);
+   if(!ball.scored && ball.vy>0 && ball.x>h.x-24&&ball.x<h.x+24&&ball.y>h.y-10&&ball.y<h.y+14){
+    ball.scored=true;
+    if(side==='right'){scoreP++;ps.textContent=scoreP}else{scoreB++;bs.textContent=scoreB}
+   }
+  }
+  // Rim / backboard collision
+  for(const side of ['left','right']){
+   const h=hoop(side);
+   if(Math.abs(ball.y-h.y)<7&&Math.abs(ball.x-h.x)<32&&ball.vy>0){ball.vy=-Math.abs(ball.vy)*.55;ball.vx+=(ball.x<h.x?-1:1)*.7}
+  }
+  if(ball.x<20||ball.x>880){ball.vx*=-.65;ball.x=clamp(ball.x,20,880)}
+  if(ball.y>ground-12){ball.y=ground-12;ball.vy=-Math.abs(ball.vy)*.58;ball.vx*=.82;ball.bounces++}
+  if(ball.bounces>3||Math.abs(ball.vx)<.45&&ball.y>=ground-14){
+   ball.active=false;
+   if(ball.scored && (scoreP>=5||scoreB>=5)){running=false;draw();ctx.fillStyle='rgba(9,18,38,.78)';ctx.fillRect(0,0,W,H);ctx.fillStyle='#fff';ctx.font='bold 42px Arial';ctx.textAlign='center';ctx.fillText(scoreP>=5?'ТЫ ПОБЕДИЛ!':'БОТ ПОБЕДИЛ!',W/2,H/2);ctx.font='22px Arial';ctx.fillText('Нажми «Сначала» или «Меню»',W/2,H/2+42);return}
+   // Ball is free; nearest stickman catches it when close, otherwise it settles for either to grab
+   ball.vx=0;ball.vy=0;
+  }
+ } else {
+  // ball stays in hand if owned; if free, players can pick it up
+  if(turn){const a=turn==='you'?player:bot;ball.x=a.x+a.dir*30;ball.y=a.y-43}
+  else{
+   const dp=Math.hypot(player.x-ball.x,player.y- ball.y),db=Math.hypot(bot.x-ball.x,bot.y-ball.y);
+   if(dp<55){ballOwner('you')}
+   else if(db<55){ballOwner('bot')}
+   else{
+    // loose ball rolls toward the closest player
+    const nearest=Math.abs(player.x-ball.x)<Math.abs(bot.x-ball.x)?player:bot;
+    ball.x+=Math.sign(nearest.x-ball.x)*1.8*s;
+    if(Math.abs(nearest.x-ball.x)<40)ballOwner(nearest===player?'you':'bot');
+   }
+  }
+ }
+ // The AI attempts a steal when it is close to the player who has the ball.
+ if(turn==='you'&&!ball.active&&bot.stealCD<=0&&Math.hypot(bot.x-player.x,bot.y-player.y)<72){
+  bot.stealCD=48;
+  bot.stealAnim=18;
+  if(Math.random()<0.012*s){
+   ballOwner('bot');
+   stealMessage='Бот отобрал у тебя мяч!';
+  }
+ }
+ // bot jumps to block player shots, and jumps when going for a high loose ball
+ if(turn==='you'&&!ball.active&&Math.abs(player.x-bot.x)<260&&bot.onGround&&Math.random()<.055*s)jump(bot);
+ if(ball.active&&ball.x>400&&bot.onGround&&ball.y<bot.y-65&&Math.abs(ball.x-bot.x)<150&&Math.random()<.22*s)jump(bot);
+ if(turn==='bot'&&!ball.active&&bot.onGround&&Math.random()<.018*s)jump(bot);
+ // possession collisions
+ if(!ball.active&&turn==='you'&&Math.abs(player.x-bot.x)<37){player.x-=player.dir*1.4}
+ if(!ball.active&&turn==='bot'&&Math.abs(player.x-bot.x)<37){bot.x-=bot.dir*1.4}
+}
+function drawPerson(a){
+ const x=a.x,y=a.y,c=a.color;
+ const moving=Math.abs(a.vx)>.35;
+ const phase=performance.now()/105+(a===bot?1.8:0);
+ const swing=moving?Math.sin(phase)*12:0;
+ const airborne=!a.onGround;
+ ctx.save();ctx.lineCap='round';ctx.lineJoin='round';ctx.strokeStyle=c;ctx.lineWidth=7;
+ // Head and torso bob gently while running; in the air the body leans slightly.
+ const bob=moving?Math.abs(Math.sin(phase))*2.5:0;
+ const lean=airborne?-3:0;
+ ctx.beginPath();ctx.arc(x+lean,y-76-bob,13,0,Math.PI*2);ctx.stroke();
+ ctx.beginPath();ctx.moveTo(x,y-62-bob);ctx.lineTo(x+lean,y-32);ctx.stroke();
+ // Alternating legs while running, tucked legs while jumping.
+ ctx.beginPath();
+ if(airborne){
+  ctx.moveTo(x+lean,y-32);ctx.lineTo(x-17,y-17);
+  ctx.moveTo(x+lean,y-32);ctx.lineTo(x+17,y-21);
+ }else{
+  ctx.moveTo(x+lean,y-32);ctx.lineTo(x-12+swing,y-4);
+  ctx.moveTo(x+lean,y-32);ctx.lineTo(x+13-swing,y-4);
+ }
+ ctx.stroke();
+ // Arm reaches forward during a steal attempt, otherwise swings opposite to the legs.
+ const armY=y-53-bob;
+ let handX,handY;
+ if(a.stealAnim>0){
+  handX=x+a.dir*48;handY=y-48;
+  ctx.beginPath();ctx.moveTo(x,armY);ctx.lineTo(x+a.dir*31,armY+8);ctx.lineTo(handX,handY);ctx.stroke();
+ }else if(!ball.active&&turn===(a===player?'you':'bot')){
+  handX=x+a.dir*30;handY=y-43-bob;
+  ctx.beginPath();ctx.moveTo(x,armY);ctx.lineTo(x+a.dir*19,armY+8);ctx.lineTo(handX,handY);ctx.stroke();
+ }else{
+  handX=x+a.dir*20;handY=y-42-bob+swing*.35;
+  ctx.beginPath();ctx.moveTo(x,armY);ctx.lineTo(x-a.dir*3+swing*.4,y-48-bob);ctx.lineTo(handX,handY);ctx.stroke();
+ }
+ ctx.beginPath();ctx.moveTo(x,armY);ctx.lineTo(x-a.dir*17-swing*.3,y-40-bob);ctx.stroke();
+ if(!ball.active&&turn===(a===player?'you':'bot')){
+  ctx.fillStyle='#f7a928';ctx.beginPath();ctx.arc(handX+a.dir*7,handY,11,0,Math.PI*2);ctx.fill();ctx.strokeStyle='#7b4315';ctx.lineWidth=1.5;ctx.stroke();
+  ctx.beginPath();ctx.moveTo(handX-1,handY-10);ctx.lineTo(handX+5,handY+10);ctx.moveTo(handX-6,handY-7);ctx.lineTo(handX+8,handY+5);ctx.stroke();
+ }
+ ctx.restore();
+}
+function drawHoop(side){
+ const h=hoop(side);
+ ctx.strokeStyle='#56657a';ctx.lineWidth=6;ctx.beginPath();ctx.moveTo(h.x+(side==='left'?0:0),h.y-55);ctx.lineTo(h.x,h.y+5);ctx.stroke();
+ ctx.fillStyle='#fff';ctx.fillRect(h.x-5,h.y-56,10,40);
+ ctx.strokeStyle=side==='left'?'#e53935':'#1769df';ctx.lineWidth=5;ctx.beginPath();ctx.moveTo(h.x-23,h.y);ctx.lineTo(h.x+23,h.y);ctx.stroke();
+ ctx.strokeStyle='rgba(255,255,255,.7)';ctx.lineWidth=1.5;ctx.beginPath();ctx.moveTo(h.x-20,h.y+2);ctx.lineTo(h.x-13,h.y+28);ctx.lineTo(h.x+13,h.y+28);ctx.lineTo(h.x+20,h.y+2);ctx.stroke();
+}
+function drawBall(x,y,r=11){
+ ctx.fillStyle='#f7a928';ctx.beginPath();ctx.arc(x,y,r,0,Math.PI*2);ctx.fill();ctx.strokeStyle='#703b12';ctx.lineWidth=1.8;ctx.stroke();
+ ctx.beginPath();ctx.moveTo(x-r*.85,y);ctx.lineTo(x+r*.85,y);ctx.moveTo(x,y-r*.9);ctx.quadraticCurveTo(x-r*.45,y,x-r*.3,y+r*.9);ctx.moveTo(x,y-r*.9);ctx.quadraticCurveTo(x+r*.45,y,x+r*.3,y+r*.9);ctx.stroke();
+}
+function crosshair(x,y){
+ ctx.save();ctx.strokeStyle='#e92c59';ctx.lineWidth=2.5;ctx.beginPath();ctx.arc(x,y,13,0,Math.PI*2);ctx.moveTo(x-20,y);ctx.lineTo(x+20,y);ctx.moveTo(x,y-20);ctx.lineTo(x,y+20);ctx.stroke();ctx.restore();
+}
+function draw(){
+ ctx.clearRect(0,0,W,H);
+ const g=ctx.createLinearGradient(0,0,0,H);g.addColorStop(0,'#c9edff');g.addColorStop(1,'#f5fbff');ctx.fillStyle=g;ctx.fillRect(0,0,W,H);
+ ctx.fillStyle='#9cda86';ctx.fillRect(0,ground,W,H-ground);
+ ctx.strokeStyle='#fff';ctx.lineWidth=3;ctx.beginPath();ctx.moveTo(0,ground);ctx.lineTo(W,ground);ctx.stroke();
+ ctx.strokeStyle='rgba(255,255,255,.7)';ctx.beginPath();ctx.arc(W/2,ground,78,Math.PI,Math.PI*2);ctx.stroke();ctx.beginPath();ctx.moveTo(W/2,ground);ctx.lineTo(W/2,H);ctx.stroke();
+ drawHoop('left');drawHoop('right');
+ // Shadows shrink as the stickmen jump, making their height easier to read.
+ for(const a of [player,bot]){
+  const h=Math.max(0,ground-a.y);ctx.fillStyle='rgba(20,40,60,'+(0.20-h/650)+')';
+  ctx.beginPath();ctx.ellipse(a.x,ground-2,Math.max(8,20-h*.18),Math.max(2,5-h*.035),0,0,Math.PI*2);ctx.fill();
+ }
+ drawPerson(player);drawPerson(bot);
+ if(ball.active)drawBall(ball.x,ball.y);
+ else if(!turn)drawBall(ball.x,ball.y);
+ // Always visible aiming reticle at the target hoop; during a drag it follows projected aim.
+ if(turn==='you'&&!ball.active){
+  let tx=hoop('right').x,ty=hoop('right').y-28;
+  if(aiming&&pointer){tx=pointer.x;ty=pointer.y}
+  crosshair(tx,ty);
+ }
+ ctx.fillStyle='#1d3557';ctx.font='bold 17px Arial';ctx.textAlign='center';ctx.fillText('ТЫ',player.x,player.y-101);ctx.fillText('БОТ',bot.x,bot.y-101);
+ if(stealMessage){ctx.font='bold 15px Arial';ctx.fillStyle='#17304f';ctx.fillText(stealMessage,W/2,58)}
+ if(turn==='you'){ctx.font='bold 16px Arial';ctx.fillStyle='#1d3557';ctx.fillText('ТВОЙ МЯЧ — ЦЕЛЬСЯ И БРОСАЙ!',W/2,32)}
+ else if(turn==='bot'){ctx.font='bold 16px Arial';ctx.fillText('ХОД БОТА',W/2,32)}
+}
+function loop(now){if(!running)return;const dt=Math.min(32,now-last);last=now;update(dt);draw();if(running)requestAnimationFrame(loop)}
+function canvasPoint(e){const r=canvas.getBoundingClientRect();return {x:(e.clientX-r.left)*W/r.width,y:(e.clientY-r.top)*H/r.height}}
+canvas.addEventListener('pointerdown',e=>{
+ if(!running||turn!=='you'||ball.active)return;
+ const p=canvasPoint(e);const hand={x:player.x+player.dir*30,y:player.y-43};
+ if(Math.hypot(p.x-ball.x,p.y-ball.y)<55||Math.hypot(p.x-hand.x,p.y-hand.y)<55){aiming=true;pointer=p;canvas.setPointerCapture(e.pointerId)}
+});
+canvas.addEventListener('pointermove',e=>{if(aiming)pointer=canvasPoint(e)});
+canvas.addEventListener('pointerup',e=>{
+ if(!aiming)return;const p=canvasPoint(e);aiming=false;pointer=null;
+ const dx=p.x-ball.x,dy=p.y-ball.y;
+ // Drag backwards from the ball to set launch direction; otherwise throw toward aim point.
+ let vx=clamp(dx/22,-15,15),vy=clamp(dy/22,-14,8);
+ if(Math.abs(vx)<2)vx=player.dir*8;
+ if(vx*player.dir<0){vx=-vx;vy-=2}
+ throwFrom('you',vx,vy);
+});
+window.addEventListener('keydown',e=>{keys[e.code]=true;if(e.code==='KeyE')trySteal('you');if(['ArrowLeft','ArrowRight','ArrowUp','Space'].includes(e.code))e.preventDefault();if(['ArrowUp','KeyW','Space'].includes(e.code))jump(player);if(e.code==='Enter')throwPlayer()});
+window.addEventListener('keyup',e=>keys[e.code]=false);
+document.getElementById('left').onpointerdown=()=>keys.ArrowLeft=true;document.getElementById('left').onpointerup=()=>keys.ArrowLeft=false;document.getElementById('left').onpointerleave=()=>keys.ArrowLeft=false;
+document.getElementById('right').onpointerdown=()=>keys.ArrowRight=true;document.getElementById('right').onpointerup=()=>keys.ArrowRight=false;document.getElementById('right').onpointerleave=()=>keys.ArrowRight=false;
+document.getElementById('jump').onclick=()=>jump(player);document.getElementById('shoot').onclick=throwPlayer;document.getElementById('steal').onclick=()=>trySteal('you');
+})();
+</script>
+</body>
+</html>
